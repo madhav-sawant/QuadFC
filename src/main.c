@@ -40,7 +40,7 @@
 #define BUTTON_PIN 0 // Boot button = emergency stop
 
 #define CONTROL_LOOP_FREQ_HZ 250
-#define TUNING_THROTTLE_LIMIT 1400 // Safety limit during tuning
+#define TUNING_THROTTLE_LIMIT 1650 // Safety limit during tuning
 
 #define RC_DEADBAND_US 50
 #define RC_MAX_YAW_RATE_DPS 180.0f
