@@ -40,7 +40,6 @@
 #define BUTTON_PIN 0 // Boot button = emergency stop
 
 #define CONTROL_LOOP_FREQ_HZ 250
-//#define ENABLE_WIFI // Uncomment to enable WiFi/Webserver (Disable for Field Tests)
 #define TUNING_THROTTLE_LIMIT 1650 // Safety limit during tuning
 
 #define RC_DEADBAND_US 50
@@ -48,6 +47,8 @@
 
 #define CRASH_ANGLE_DEG 60.0f
 #define CRASH_GYRO_RATE_DPS 2000.0f
+
+// #define ENABLE_WIFI // Comment out to disable WiFi for range safety
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Global State
@@ -273,13 +274,8 @@ void app_main(void) {
   rx_init();
   mixer_init();
   blackbox_init();
-  
-// Optional WiFi Telemetry
 #ifdef ENABLE_WIFI
   webserver_init();
-  printf("WiFi initialized\n");
-#else
-  printf("WiFi DISABLED for Field Safety\n");
 #endif
 
   // Initialize IMU with error detection
@@ -325,8 +321,20 @@ void app_main(void) {
 
   if (fabsf(avg_roll) < 1.0f && fabsf(avg_pitch) < 1.0f) {
     printf("Level check: OK\n");
+    // Success blink (2x fast)
+    for(int i=0; i<2; i++) {
+        gpio_set_level(LED_PIN, 1); vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_set_level(LED_PIN, 0); vTaskDelay(pdMS_TO_TICKS(100));
+    }
   } else {
     printf("Level check: FAILED (R=%.1f, P=%.1f)\n", avg_roll, avg_pitch);
+    // Failure Loop - Blink Forever
+    // Pilot must unplug and re-level drone
+    while(1) {
+        gpio_set_level(LED_PIN, 1); vTaskDelay(pdMS_TO_TICKS(500));
+        gpio_set_level(LED_PIN, 0); vTaskDelay(pdMS_TO_TICKS(500));
+        printf("ERROR: Not Level! Cannot fly.\n");
+    }
   }
 
   // Start control loop
