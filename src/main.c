@@ -40,6 +40,7 @@
 #define BUTTON_PIN 0 // Boot button = emergency stop
 
 #define CONTROL_LOOP_FREQ_HZ 250
+//#define ENABLE_WIFI // Uncomment to enable WiFi/Webserver (Disable for Field Tests)
 #define TUNING_THROTTLE_LIMIT 1650 // Safety limit during tuning
 
 #define RC_DEADBAND_US 50
@@ -272,7 +273,14 @@ void app_main(void) {
   rx_init();
   mixer_init();
   blackbox_init();
+  
+// Optional WiFi Telemetry
+#ifdef ENABLE_WIFI
   webserver_init();
+  printf("WiFi initialized\n");
+#else
+  printf("WiFi DISABLED for Field Safety\n");
+#endif
 
   // Initialize IMU with error detection
   if (imu_init() != ESP_OK) {
