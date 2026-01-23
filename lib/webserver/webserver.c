@@ -1,5 +1,5 @@
 #include "webserver.h"
-#include "../adc/adc.h"
+// #include "../adc/adc.h"
 #include "../blackbox/blackbox.h"
 #include "../config/config.h"
 #include "../imu/imu.h"
@@ -10,14 +10,26 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_partition.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+static const char *TAG __attribute__((unused)) = "WEBSERVER";
+
 // External system state from main.c
 extern bool system_armed;
+extern bool error_state;
 extern char system_status_msg[64];
+extern float get_fused_alt(void);
+extern float get_baro_alt(void);
+extern float get_laser_alt(void);
+extern uint16_t get_battery_mv(void);
+
+// Error message string (set by main loop or control loop)
+static char error_msg[128] = "";
 
 #define WIFI_SSID "QuadPID"
 #define WIFI_PASS "12345678"
@@ -31,33 +43,60 @@ static const char *HTML_PAGE =
     "<style>"
     ".live{background:#f0f0f0;padding:10px;margin:10px "
     "0;font-family:monospace;}"
-    ".live td{padding:2px 8px;}"
+    ".live table{border-collapse: collapse; width: 100%; max-width: 400px;}"
+    ".live td, .live th{padding:4px 8px; text-align: right; border-bottom: 1px "
+    "solid #ddd;}"
+    ".live td:first-child{text-align: left; font-weight: bold; width: 60px;}"
     ".tgt{color:blue;} .act{color:green;} .rate{color:orange;}"
     "</style>"
     "<script>"
     "function upd(){"
     "fetch('/live').then(r=>r.json()).then(d=>{"
+    "document.getElementById('ta').innerText=d.ta.toFixed(1);"
     "document.getElementById('tr').innerText=d.tr.toFixed(1);"
+    "document.getElementById('tm').innerText=d.tm.toFixed(1);"
     "document.getElementById('tp').innerText=d.tp.toFixed(1);"
     "document.getElementById('rr').innerText=d.rr.toFixed(1);"
     "document.getElementById('rp').innerText=d.rp.toFixed(1);"
+    "document.getElementById('roll').innerText=d.roll.toFixed(1);"
+    "document.getElementById('pitch').innerText=d.pitch.toFixed(1);"
+    "document.getElementById('alt').innerText=(d.alt*100).toFixed(1);"
+    "document.getElementById('baro').innerText=(d.baro*100).toFixed(1);"
+    "document.getElementById('laser').innerText=(d.laser*100).toFixed(1);"
     "document.getElementById('armed').innerText=d.armed?'ARMED':'DISARMED';"
     "document.getElementById('armed').style.color=d.armed?'red':'gray';"
-    "}).catch(e=>{});setTimeout(upd,200);}"
+    "var errDiv=document.getElementById('errors');"
+    "if(d.err && d.err.length>0){errDiv.innerHTML='<b>ERRORS:</b> "
+    "'+d.err;errDiv.style.display='block';}"
+    "else{errDiv.style.display='none';}"
+    "}).catch(e=>{});setTimeout(upd,25);}"
     "window.onload=upd;"
     "</script>"
     "</head><body>"
     "<h2>QuadPID - Bat: %d mV</h2>"
     "<h3>Status: <span id='armed' style='color:gray'>--</span> | %s</h3>"
     "<div class='live'>"
-    "<b>Live Rates (deg/s)</b><br>"
+    "<b>Flight Data</b><br>"
     "<table>"
-    "<tr><th></th><th class='tgt'>Target</th><th class='act'>Actual</th></tr>"
-    "<tr><td>Roll:</td><td class='tgt' id='tr'>--</td><td class='act' "
-    "id='rr'>--</td></tr>"
-    "<tr><td>Pitch:</td><td class='tgt' id='tp'>--</td><td class='act' "
-    "id='rp'>--</td></tr>"
-    "</table></div>"
+    "<tr><th></th><th class='tgt'>Tgt Angle</th><th class='tgt'>Tgt "
+    "Rate</th><th class='act'>Act Rate</th><th class='act'>Angle</th></tr>"
+    "<tr><td>Roll:</td><td class='tgt' id='ta'>--</td><td class='tgt' "
+    "id='tr'>--</td><td class='act' "
+    "id='rr'>--</td><td class='act' id='roll'>--</td></tr>"
+    "<tr><td>Pitch:</td><td class='tgt' id='tm'>--</td><td class='tgt' "
+    "id='tp'>--</td><td class='act' "
+    "id='rp'>--</td><td class='act' id='pitch'>--</td></tr>"
+    "</table>"
+    "<br><b>Altitude (cm)</b><br>"
+    "<table>"
+    "<tr><td>Fused:</td><td id='alt'>--</td><td>(Baro+Laser)</td></tr>"
+    "<tr><td>Baro:</td><td id='baro'>--</td><td>(Filtered)</td></tr>"
+    "<tr><td>Laser:</td><td id='laser'>--</td><td>(< 1.0m)</td></tr>"
+    "</table>"
+    "<div id='errors' "
+    "style='display:none;background:#ffcccc;color:red;padding:8px;margin-top:"
+    "10px;border-radius:4px;font-weight:bold;'></div>"
+    "</div>"
     "<form method=POST action=/s>"
     "<b>Rate Roll</b> P:<input name=rp value=%.3f size=6> "
     "I:<input name=ri value=%.3f size=6> "
@@ -78,6 +117,7 @@ static const char *HTML_PAGE =
     "<input type=submit value='Clear Blackbox'></form> | "
     "<form style='display:inline' method=POST action=/calibrate>"
     "<input type=submit value='Recalibrate IMU'></form>"
+
     "<p style='color:green'><b>%s</b></p>"
     "<p style='color:red'><b>%s</b></p>"
     "</body></html>";
@@ -110,7 +150,7 @@ static esp_err_t get_handler(httpd_req_t *req) {
       err_msg = "ERROR: Disarm first before changing settings!";
   }
 
-  snprintf(html, 4096, HTML_PAGE, adc_read_battery_voltg(), system_status_msg,
+  snprintf(html, 4096, HTML_PAGE, get_battery_mv(), system_status_msg,
            sys_cfg.roll_kp, sys_cfg.roll_ki, sys_cfg.roll_kd, sys_cfg.pitch_kp,
            sys_cfg.pitch_ki, sys_cfg.pitch_kd, sys_cfg.yaw_kp, sys_cfg.yaw_ki,
            sys_cfg.yaw_kd, sys_cfg.angle_kp, sys_cfg.angle_ki, msg, err_msg);
@@ -180,48 +220,39 @@ static esp_err_t blackbox_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Content-Disposition",
                      "attachment; filename=blackbox.csv");
 
-  // Send CSV header - EXPANDED for deep analysis
-  // Send CSV header - SIMPLIFIED for rate only
-  const char *header = "time_ms,flags,"
-                       "gyro_x,gyro_y,gyro_z,"         // Gyro rates
-                       "accel_x,accel_y,accel_z,"      // Raw accelerometer
-                       "roll,pitch,"                   // Fused angles (ref)
-                       "rate_sp_roll,rate_sp_pitch,"   // Rate setpoints
-                       "rate_err_roll,rate_err_pitch," // Rate errors
-                       "rate_i_roll,rate_i_pitch,rate_i_yaw," // Rate I-terms
-                       "pid_roll,pid_pitch,pid_yaw,"          // PID outputs
-                       "m1,m2,m3,m4,"                         // Motors
-                       "rc_thr,rc_roll,rc_pitch,"             // RC inputs
-                       "battery_mv,loop_us\n";                // System health
+  // Send CSV header - with angle data for drift analysis
+  const char *header = "angle_roll,angle_pitch,"
+                       "gyro_x,gyro_y,gyro_z,"
+                       "pid_roll,pid_pitch,pid_yaw,"
+                       "m1,m2,m3,m4,"
+                       "rc_roll,rc_pitch,rc_yaw,"
+                       "rc_thr,"
+                       "battery_mv,"
+                       "i2c_errors,accel_z_raw\n";
   httpd_resp_sendstr_chunk(req, header);
 
   // Send each entry
   uint16_t count = blackbox_get_count();
-  char line[512]; // Larger buffer for expanded data
+  char line[256];
 
   for (uint16_t i = 0; i < count; i++) {
     const blackbox_entry_t *e = blackbox_get_entry(i);
     if (e) {
       snprintf(line, sizeof(line),
-               "%lu,%u,"         // time, flags
-               "%.2f,%.2f,%.2f," // gyro x/y/z
-               "%.3f,%.3f,%.3f," // accel x/y/z
-               "%.2f,%.2f,"      // roll, pitch
-               "%.2f,%.2f,"      // rate setpoints
-               "%.2f,%.2f,"      // rate errors
-               "%.2f,%.2f,%.2f," // rate I-terms
-               "%.2f,%.2f,%.2f," // PID outputs
+               "%.2f,%.2f,"      // angles
+               "%.2f,%.2f,%.2f," // gyro
+               "%.2f,%.2f,%.2f," // pid
                "%u,%u,%u,%u,"    // motors
-               "%u,%u,%u,"       // RC inputs
-               "%u,%u\n",        // battery, loop time
-               (unsigned long)e->timestamp_ms, e->flags, e->gyro_x, e->gyro_y,
-               e->gyro_z, e->accel_x, e->accel_y, e->accel_z, e->angle_roll,
-               e->angle_pitch, e->rate_setpoint_roll, e->rate_setpoint_pitch,
-               e->rate_error_roll, e->rate_error_pitch, e->rate_i_term_roll,
-               e->rate_i_term_pitch, e->rate_i_term_yaw, e->pid_roll,
-               e->pid_pitch, e->pid_yaw, e->motor[0], e->motor[1], e->motor[2],
-               e->motor[3], e->rc_throttle, e->rc_roll, e->rc_pitch,
-               e->battery_mv, e->loop_time_us);
+               "%u,%u,%u,"       // rc roll/pitch/yaw
+               "%u,"             // rc thr
+               "%u,"             // battery
+               "%lu,%.2f\n",     // i2c_errors, accel_z
+               e->angle_roll, e->angle_pitch, e->gyro_x, e->gyro_y, e->gyro_z,
+               e->pid_roll, e->pid_pitch, e->pid_yaw, e->motor[0], e->motor[1],
+               e->motor[2], e->motor[3], 
+               e->rc_roll, e->rc_pitch, e->rc_yaw,
+               e->rc_throttle, e->battery_mv,
+               (unsigned long)e->i2c_errors, e->accel_z_raw);
       httpd_resp_sendstr_chunk(req, line);
     }
   }
@@ -275,25 +306,58 @@ void webserver_set_rate_targets(float roll_rate, float pitch_rate) {
   live_target_pitch_rate = pitch_rate;
 }
 
+static float live_target_roll_angle = 0.0f;
+static float live_target_pitch_angle = 0.0f;
+
+void webserver_set_angle_targets(float roll_angle, float pitch_angle) {
+  live_target_roll_angle = roll_angle;
+  live_target_pitch_angle = pitch_angle;
+}
+
+// Set error message to display on webserver
+void webserver_set_error(const char *msg) {
+  if (msg && strlen(msg) > 0) {
+    snprintf(error_msg, sizeof(error_msg), "%s", msg);
+  } else {
+    error_msg[0] = '\0';
+  }
+}
+
+// External sensor getters from main.c
+extern float get_fused_alt(void);
+extern float get_baro_alt(void);
+extern float get_laser_alt(void);
+
 static esp_err_t live_handler(httpd_req_t *req) {
-
-  // Actual rates are what the PID computed (or we could use GYRO data?)
-  // Let's use the PID's MEASURED rate (which is gyro)
-  // Actually rate_control_get_output returns the PID OUTPUT, not the measured
-  // rate. We need to fetch IMU data for actual rates.
+  // Fetch IMU data
   const imu_data_t *imu = imu_get_data();
-
   float roll_rate_act = 0.0f, pitch_rate_act = 0.0f;
+  float roll_deg = 0.0f, pitch_deg = 0.0f;
+
   if (imu) {
     roll_rate_act = imu->gyro_x_dps;
     pitch_rate_act = imu->gyro_y_dps;
+    roll_deg = imu->roll_deg;
+    pitch_deg = imu->pitch_deg;
   }
 
-  char json[256];
+  // Fetch Sensor Fusion Data
+  float alt_fused = get_fused_alt();
+  float alt_baro = get_baro_alt();
+  float alt_laser = get_laser_alt();
+  uint16_t battery_mv = get_battery_mv();
+
+  char json[768]; // Increased buffer size for errors
   snprintf(json, sizeof(json),
-           "{\"tr\":%.2f,\"tp\":%.2f,\"rr\":%.2f,\"rp\":%.2f,\"armed\":%s}",
-           live_target_roll_rate, live_target_pitch_rate, roll_rate_act,
-           pitch_rate_act, system_armed ? "true" : "false");
+           "{\"tr\":%.2f,\"tp\":%.2f,\"ta\":%.2f,\"tm\":%.2f,"
+           "\"rr\":%.2f,\"rp\":%.2f,"
+           "\"roll\":%.1f,\"pitch\":%.1f,"
+           "\"alt\":%.2f,\"baro\":%.2f,\"laser\":%.2f,"
+           "\"bat\":%d,\"armed\":%s,\"err\":\"%s\"}",
+           live_target_roll_rate, live_target_pitch_rate,
+           live_target_roll_angle, live_target_pitch_angle, roll_rate_act,
+           pitch_rate_act, roll_deg, pitch_deg, alt_fused, alt_baro, alt_laser,
+           battery_mv, system_armed ? "true" : "false", error_msg);
 
   httpd_resp_set_type(req, "application/json");
   httpd_resp_send(req, json, strlen(json));

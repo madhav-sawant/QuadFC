@@ -25,4 +25,7 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
 // Freeze/unfreeze integral accumulation (prevents windup during ground idle)
 void pid_freeze_integral(pid_controller_t *pid, bool freeze);
 
+// Reset PID state (integral, derivative, previous measurement)
+void pid_reset(pid_controller_t *pid);
+
 #endif // PID_H

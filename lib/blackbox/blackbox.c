@@ -16,7 +16,7 @@ static volatile uint16_t entry_count = 0;
 static volatile bool recording = false; // Start OFF, enable on ARM
 
 // Mutex for buffer access during reads
-static SemaphoreHandle_t buffer_mutex = NULL;
+static SemaphoreHandle_t buffer_mutex __attribute__((unused)) = NULL;
 
 // FreeRTOS queue for passing entries from control loop to blackbox task
 #define BLACKBOX_QUEUE_SIZE 16

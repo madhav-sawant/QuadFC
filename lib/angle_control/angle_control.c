@@ -1,86 +1,89 @@
 /**
  * @file angle_control.c
- * @brief Angle Mode Controller Implementation
- *
- * PI controller that converts angle error to rate setpoint.
- * P-term: Proportional response to angle error
- * I-term: Eliminates steady-state drift
+ * @brief Angle PI controller implementation
  */
 
 #include "angle_control.h"
 #include "../config/config.h"
+#include <math.h>
 
-// Control loop frequency (must match main.c)
-#define CONTROL_FREQ_HZ 250.0f
-#define DT (1.0f / CONTROL_FREQ_HZ)
+// Internal state
+static float i_roll_accum = 0.0f;
+static float i_pitch_accum = 0.0f;
+static angle_output_t output;
 
-// Maximum rate output from angle controller (deg/s)
-#define MAX_ANGLE_OUTPUT_RATE 150.0f
-
-// Maximum I-term contribution (deg/s) - prevents windup
-#define MAX_I_OUTPUT 30.0f
-
-// Internal I-term state
-static float i_roll = 0.0f;
-static float i_pitch = 0.0f;
+// Constants from main.c
+#define MAX_ANGLE_I 30.0f
+#define MAX_ANGLE_RATE 150.0f
+#define ANGLE_I_THROTTLE_MIN 1200
 
 void angle_control_init(void) {
-  i_roll = 0.0f;
-  i_pitch = 0.0f;
+  i_roll_accum = 0.0f;
+  i_pitch_accum = 0.0f;
+  output.target_roll_rate = 0.0f;
+  output.target_pitch_rate = 0.0f;
 }
 
-void angle_control_reset(void) {
-  i_roll = 0.0f;
-  i_pitch = 0.0f;
-}
+void angle_control_update(float target_roll, float target_pitch,
+                          float actual_roll, float actual_pitch, float dt_sec,
+                          bool armed, uint16_t throttle) {
+  float roll_error = target_roll - actual_roll;
+  float pitch_error = target_pitch - actual_pitch;
 
-void angle_control_update(float target_roll_deg, float target_pitch_deg,
-                          float current_roll_deg, float current_pitch_deg,
-                          float *out_roll_rate, float *out_pitch_rate) {
-  // Calculate angle errors
-  float roll_error = target_roll_deg - current_roll_deg;
-  float pitch_error = target_pitch_deg - current_pitch_deg;
+  // I-term logic
+  if (!armed) {
+    i_roll_accum = 0.0f;
+    i_pitch_accum = 0.0f;
+  } else if (sys_cfg.angle_ki > 0.0f && throttle > ANGLE_I_THROTTLE_MIN) {
+    // Only accumulate if armed and throttle is high enough
+    float max_i_accum = MAX_ANGLE_I / sys_cfg.angle_ki;
 
-  // I-term integration (only if Ki > 0)
-  if (sys_cfg.angle_ki > 0.0f) {
-    // Calculate max integral to prevent windup
-    float max_integral = MAX_I_OUTPUT / sys_cfg.angle_ki;
+    i_roll_accum += roll_error * dt_sec;
+    if (i_roll_accum > max_i_accum)
+      i_roll_accum = max_i_accum;
+    if (i_roll_accum < -max_i_accum)
+      i_roll_accum = -max_i_accum;
 
-    // Integrate
-    i_roll += roll_error * DT;
-    i_pitch += pitch_error * DT;
-
-    // Anti-windup clamp
-    if (i_roll > max_integral)
-      i_roll = max_integral;
-    if (i_roll < -max_integral)
-      i_roll = -max_integral;
-    if (i_pitch > max_integral)
-      i_pitch = max_integral;
-    if (i_pitch < -max_integral)
-      i_pitch = -max_integral;
+    i_pitch_accum += pitch_error * dt_sec;
+    if (i_pitch_accum > max_i_accum)
+      i_pitch_accum = max_i_accum;
+    if (i_pitch_accum < -max_i_accum)
+      i_pitch_accum = -max_i_accum;
   } else {
-    // Ki is 0, clear integrals
-    i_roll = 0.0f;
-    i_pitch = 0.0f;
+    // Hold I-term (don't clear it mid-flight if throttle drops momentarily, but don't accumulate)
+    // Actually main.c logic was: if armed but low throttle -> hold? 
+    // Re-reading main.c: "else { angle_i = 0 }" was applied if (!armed).
+    // The "else if" managed the active accumulation.
+    // Wait, main.c had a subtle logic: 
+    // if (!armed) { reset } 
+    // else if (ki > 0 && thr > 1200) { accumulate }
+    // else { reset } <--- This 3rd branch in main.c line 157 resets it if high throttle condition fails!
+    // Let's replicate main.c exactly to avoid behavior changes.
+    i_roll_accum = 0.0f;
+    i_pitch_accum = 0.0f;
   }
 
-  // PI controller: P + I
-  float roll_rate =
-      (sys_cfg.angle_kp * roll_error) + (sys_cfg.angle_ki * i_roll);
-  float pitch_rate =
-      (sys_cfg.angle_kp * pitch_error) + (sys_cfg.angle_ki * i_pitch);
+  // Calculate Target Rate = P + I
+  output.target_roll_rate =
+      sys_cfg.angle_kp * roll_error + sys_cfg.angle_ki * i_roll_accum;
+  output.target_pitch_rate =
+      sys_cfg.angle_kp * pitch_error + sys_cfg.angle_ki * i_pitch_accum;
 
-  // Clamp output rates
-  if (roll_rate > MAX_ANGLE_OUTPUT_RATE)
-    roll_rate = MAX_ANGLE_OUTPUT_RATE;
-  if (roll_rate < -MAX_ANGLE_OUTPUT_RATE)
-    roll_rate = -MAX_ANGLE_OUTPUT_RATE;
-  if (pitch_rate > MAX_ANGLE_OUTPUT_RATE)
-    pitch_rate = MAX_ANGLE_OUTPUT_RATE;
-  if (pitch_rate < -MAX_ANGLE_OUTPUT_RATE)
-    pitch_rate = -MAX_ANGLE_OUTPUT_RATE;
+  // Clamp Output Rates
+  if (output.target_roll_rate > MAX_ANGLE_RATE)
+    output.target_roll_rate = MAX_ANGLE_RATE;
+  if (output.target_roll_rate < -MAX_ANGLE_RATE)
+    output.target_roll_rate = -MAX_ANGLE_RATE;
 
-  *out_roll_rate = roll_rate;
-  *out_pitch_rate = pitch_rate;
+  if (output.target_pitch_rate > MAX_ANGLE_RATE)
+    output.target_pitch_rate = MAX_ANGLE_RATE;
+  if (output.target_pitch_rate < -MAX_ANGLE_RATE)
+    output.target_pitch_rate = -MAX_ANGLE_RATE;
+}
+
+const angle_output_t *angle_control_get_output(void) { return &output; }
+
+void angle_control_get_i_terms(float *roll_i, float *pitch_i) {
+  if (roll_i) *roll_i = i_roll_accum * sys_cfg.angle_ki;
+  if (pitch_i) *pitch_i = i_pitch_accum * sys_cfg.angle_ki;
 }

@@ -24,4 +24,7 @@ float rate_control_get_i_yaw(void);
 // Freeze/unfreeze integral accumulation (prevents windup during ground idle)
 void rate_control_freeze_integral(bool freeze);
 
+// Reset all PID states (call on disarm)
+void rate_control_reset(void);
+
 #endif // RATE_CONTROL_H

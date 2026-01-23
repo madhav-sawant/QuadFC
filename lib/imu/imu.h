@@ -41,4 +41,7 @@ void imu_get_calibration(imu_calibration_t *cal);
 // Print calibration values to console
 void imu_print_calibration(void);
 
+// Get diagnostic counters
+uint32_t imu_get_i2c_errors(void);
+
 #endif // IMU_H

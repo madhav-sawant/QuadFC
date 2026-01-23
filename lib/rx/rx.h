@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define RX_PIN 26
+#define RX_PIN 33
 #define RX_CHANNEL_COUNT 8
 
 // Standard PPM ranges

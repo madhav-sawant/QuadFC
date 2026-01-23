@@ -5,59 +5,36 @@
 #include <stdint.h>
 
 // Buffer configuration
-// Reduced entries to fit expanded structure in RAM
-#define BLACKBOX_MAX_ENTRIES 1200 // ~132KB with expanded structure
+// Increased to 3000 entries (approx 36s at 83Hz)
+#define BLACKBOX_MAX_ENTRIES 2000
 
-// Log rate: 250Hz / 3 = 83Hz (captures sub-second dynamics for PID tuning)
-// At 83Hz with 1200 entries = ~14.4 seconds of recording
+// Log rate: 250Hz / 3 = 83Hz
 #define BLACKBOX_LOG_DIVIDER 3
 
 // ============================================================================
-// EXPANDED LOG ENTRY STRUCTURE (100 bytes, packed)
-// ============================================================================
-// This captures the COMPLETE control loop state for deep analysis
+// SIMPLIFIED LOG ENTRY STRUCTURE (40 bytes)
 // ============================================================================
 typedef struct __attribute__((packed)) {
-  // === TIME & STATUS (6 bytes) ===
-  uint32_t timestamp_ms; // Time since boot
-  uint16_t flags;        // Bit flags (armed, error, recovery, etc.)
+  // Angle Data (for drift analysis)
+  float angle_roll, angle_pitch; // 8
 
-  // === RAW IMU DATA (24 bytes) ===
-  // Allows post-flight filter tuning and noise analysis
-  float gyro_x, gyro_y, gyro_z; // Gyro rates (deg/s) - AFTER software filter
-  float accel_x, accel_y,
-      accel_z; // Accelerometer (g) - RAW for vibration analysis
+  // Tuning Data
+  float gyro_x, gyro_y, gyro_z;       // 12
+  float pid_roll, pid_pitch, pid_yaw; // 12
 
-  // === FUSED ANGLES (8 bytes) ===
-  float angle_roll,
-      angle_pitch; // Complementary filter output (deg) - KEEP for reference
+  // Motor Output (Saturation check)
+  uint16_t motor[4]; // 8
 
-  // === RATE LOOP - INNER (28 bytes) ===
-  // Critical for understanding oscillation and response
-  float rate_setpoint_roll;  // Output from angle loop (deg/s)
-  float rate_setpoint_pitch; // Output from angle loop (deg/s)
-  float rate_error_roll;     // Setpoint - Actual (deg/s)
-  float rate_error_pitch;    // Setpoint - Actual (deg/s)
-  float rate_i_term_roll;    // Rate I-term (for windup diagnosis)
-  float rate_i_term_pitch;   // Rate I-term (for windup diagnosis)
-  float rate_i_term_yaw;     // Rate I-term (for windup diagnosis)
+  // RC Input (Reference)
+  uint16_t rc_roll;     // 2
+  uint16_t rc_pitch;    // 2
+  uint16_t rc_yaw;      // 2
+  uint16_t rc_throttle; // 2
 
-  // === PID OUTPUTS (12 bytes) ===
-  float pid_roll, pid_pitch, pid_yaw; // Final PID outputs to mixer
-
-  // === MOTORS (8 bytes) ===
-  uint16_t motor[4]; // Motor PWM values (μs)
-
-  // === RC INPUTS (6 bytes) ===
-  uint16_t rc_throttle; // Throttle stick (μs)
-  uint16_t rc_roll;     // Roll stick (μs)
-  uint16_t rc_pitch;    // Pitch stick (μs)
-
-  // === SYSTEM HEALTH (6 bytes) ===
-  uint16_t battery_mv;   // Battery voltage (mV)
-  uint16_t loop_time_us; // Control loop execution time (μs)
-  int8_t cpu_temp;       // ESP32 temperature (°C) - optional
-  uint8_t pad;           // Padding for alignment
+  // Health
+  uint16_t battery_mv; // 2
+  uint32_t i2c_errors; // 4 - Incremental I2C I/O error count
+  float accel_z_raw;   // 4 - Filtered Accel Z (diagnostic for vibration)
 
 } blackbox_entry_t;
 

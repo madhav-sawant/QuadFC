@@ -1,10 +1,12 @@
+/**
+ * @file pid.c
+ * @brief Generic PID controller with D-term filtering and integral freeze
+ */
+
 #include "pid.h"
 #include <stdbool.h>
 
-// D-term low-pass filter coefficient
-// At 250Hz loop, alpha=0.15 gives ~30Hz cutoff - stronger filtering for high-KV
-// vibration
-#define D_TERM_LPF_ALPHA 0.42f
+#define D_TERM_LPF_ALPHA 0.85f // D-term low-pass filter coefficient (Higher = less filtering/lag)
 
 void pid_init(pid_controller_t *pid, float kp, float ki, float kd,
               float output_limit, float integral_limit) {
@@ -23,10 +25,10 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
                     float dt_sec) {
   float error = setpoint - measurement;
 
-  // P-term: Proportional to error
+  // P-term
   float p_out = pid->kp * error;
 
-  // I-term: Only accumulate if not frozen (prevents windup during ground idle)
+  // I-term (with freeze capability)
   if (!pid->integral_frozen) {
     pid->integral += error * dt_sec;
     if (pid->integral > pid->integral_limit)
@@ -36,20 +38,17 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
   }
   float i_out = pid->ki * pid->integral;
 
-  // D-term: Derivative on MEASUREMENT (not error) to prevent derivative kick
-  // When setpoint changes suddenly, derivative of measurement is smooth
-  // Negative sign because d(error)/dt = d(setpoint)/dt - d(measurement)/dt
-  // and we want to dampen measurement changes
-  float raw_derivative = -(measurement - pid->prev_measurement) / dt_sec;
+  // D-term on measurement (avoids derivative kick on setpoint change)
+  float raw_d = -(measurement - pid->prev_measurement) / dt_sec;
   pid->prev_measurement = measurement;
 
-  // Low-pass filter the derivative to reduce high-frequency noise
+  // Low-pass filter the derivative
   pid->filtered_derivative =
-      D_TERM_LPF_ALPHA * raw_derivative +
+      D_TERM_LPF_ALPHA * raw_d +
       (1.0f - D_TERM_LPF_ALPHA) * pid->filtered_derivative;
   float d_out = pid->kd * pid->filtered_derivative;
 
-  // Sum and clamp output
+  // Sum and clamp
   float output = p_out + i_out + d_out;
   if (output > pid->output_limit)
     output = pid->output_limit;
@@ -61,6 +60,10 @@ float pid_calculate(pid_controller_t *pid, float setpoint, float measurement,
 
 void pid_freeze_integral(pid_controller_t *pid, bool freeze) {
   pid->integral_frozen = freeze;
-  // Don't reset integral on freeze - just pause accumulation
-  // Integral is reset on arm via pid_init()
+}
+
+void pid_reset(pid_controller_t *pid) {
+  pid->integral = 0.0f;
+  pid->prev_measurement = 0.0f;
+  pid->filtered_derivative = 0.0f;
 }

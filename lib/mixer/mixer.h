@@ -4,8 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define MIXER_IDLE_THROTTLE 1100 // Back to 1100 to allow motor differentiation
-#define MIXER_MAX_THROTTLE 1500  // Limited for safe testing (was 1850)
+#define MIXER_IDLE_THROTTLE 1150 // Increased after ESC calibration
+#define MIXER_MAX_THROTTLE 1700  // 70% power - headroom for drift compensation
 #define MIXER_STOP_CMD 1000
 
 void mixer_init(void);
