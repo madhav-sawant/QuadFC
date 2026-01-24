@@ -206,16 +206,14 @@ QuadFC/
 └── README.md
 ```
 
----
+## Acknowledgments
 
-## Credits
+Inspired by:
+- [Betaflight](https://github.com/betaflight/betaflight)
+- [ArduPilot](https://github.com/ArduPilot/ardupilot)
+- [ESP-Drone](https://github.com/espressif/esp-drone)
 
-**Firmware:** Madhav Sawant
 
-**Inspired by:**
-- Betaflight
-- ArduPilot
-- ESP-Drone by Espressif
 
 
 ---
