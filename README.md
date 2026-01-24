@@ -1,151 +1,235 @@
-# 🚁 ESP32 Quadcopter Flight Controller
-**Final Year Engineering Project**
+# QuadFC - ESP32 Based Flight Controller
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platform: ESP32](https://img.shields.io/badge/Platform-ESP32-blue.svg)](https://espressif.com)
+A custom flight controller firmware built from scratch on ESP32. Inspired by Betaflight and ArduPilot, but designed for learning and experimentation.
 
-A high-performance, DIY flight controller software built from scratch for the ESP32. Designed for F450 class quadcopters, featuring cascaded PID control, self-leveling, and safety features.
+**Status:** Angle mode tuned and working. Future updates in progress.
 
 ---
 
-## 🛠️ Hardware Specifications
+## Demo
 
-| Component | Recommendation | Your Control Rig |
-|-----------|----------------|------------------|
-| **Microcontroller** | ESP32-WROOM-32 | Core 1: Control Loop (250Hz), Core 0: Housekeeping |
-| **IMU** | MPU6050 (I2C) | Gyro + Accelerometer @ 400kHz |
-| **Frame** | F450 / F330 | **F450** (Glass Fiber / Nylon) |
-| **Motors** | 2212 920KV-1400KV | **1400KV** Brushless Outrunners |
-| **Propellers** | 8045 / 1045 | **8045** (8-inch, 4.5 pitch) |
-| **ESC** | 30A BLHeli/SimonK | Standard PWM (1000-2000µs) |
-| **Receiver** | IBUS Compatible | FlySky i6 / Turnigy |
-| **Battery** | 3S LiPo (2200mAh+) | Voltage monitored via voltage divider |
+![Drone Demo](assets/QuadFc.gif)
 
 ---
 
-## 🧠 System Architecture
+## About
 
-The software uses a **Cascaded Control Loop** architecture running at **250Hz (4ms cycle)**.
+This project started as a way to understand how drones actually work under the hood. Instead of using off-the-shelf flight controllers, I decided to build the firmware myself on an ESP32.
 
-### 1. Control Loops
-*   **Outer Loop (Angle Mode):**
-    *   **Input:** Pilot Stick Angle (Target) vs. IMU Angle (Actual)
-    *   **Controller:** PI (Proportional-Integral)
-    *   **Output:** Target Rotation Rate (deg/sec)
-    *   *Note: This provides the "Self-Leveling" capability.*
-
-*   **Inner Loop (Rate Mode):**
-    *   **Input:** Target Rate (from Outer Loop) vs. Gyro Rate (Actual)
-    *   **Controller:** PID (Proportional-Integral-Derivative)
-    *   **Output:** Motor Corrections
-    *   *Note: This provides the stabilization throughout the flight.*
-
-### 2. Sensor Fusion (IMU)
-*   **Complementary Filter:** Fuses noisy accelerometer data (gravity reference) with drifting gyro data.
-*   **Alpha = 0.996:** Highly trusted gyro for smooth flight, with strong enough accelerometer weight (0.4%) to correct drift quickly (~1 sec correction time).
-*   **Calibration:** Accelerometer offset is calibrated **ONCE** and saved to NVS (flash memory). Gyro calibrates at every boot.
-
-### 3. Mixer (Quad-X)
-Standard X-configuration mixing matrix:
-*   **Motor 1 (Rear Right, CCW):** `Throttle - Roll + Pitch - Yaw`
-*   **Motor 2 (Front Right, CW):**  `Throttle - Roll - Pitch + Yaw`
-*   **Motor 3 (Rear Left, CW):**    `Throttle + Roll + Pitch + Yaw`
-*   **Motor 4 (Front Left, CCW):**  `Throttle + Roll - Pitch - Yaw`
+The goal was to replicate what Betaflight and ArduPilot do, but at a smaller and more accessible level. This isn't meant for commercial use - it's purely for learning, experimenting, and tinkering.
 
 ---
 
-## 🚀 How to Use / Flight Manual
+## Important Note on PID Values
 
-### 1. Initial Setup (One-Time Calibration)
-**Crucial Step:** The accelerometer determines what "level" is.
-1.  Place the drone on a **perfectly level surface**.
-2.  Press and **HOLD the BOOT button** on the ESP32.
-3.  Power on the drone/connect USB while holding the button.
-4.  Wait for the LED to turn ON, then release.
-5.  Calibration is performed and **saved permanently** to flash memory.
-6.  The LED will blink 3 times to confirm success.
+This setup has **high mechanical gain** because of the 1400KV motors with 8045 props. That's why the PID values in this firmware are relatively low.
 
-### 2. Normal Startup (Every Flight)
-1.  Place drone on ground (doesn't need to be perfectly level, just still).
-2.  Power on.
-3.  **DO NOT TOUCH** the drone for 2 seconds while the Gyro calibrates.
-4.  **Level Check:**
-    *   **2 Quick Blinks:** IMU is level and ready.
-    *   **5 Slow Blinks:** Drone is tilted >2 degrees. Take off with caution or re-level.
+If you watch YouTube tutorials (like Joop Brokking or Carbon Aeronautics) where people use much higher PID values, it's because their mechanical gain is different (smaller props, lower KV motors, etc).
 
-### 3. Arming & Flying
-*   **Safety:** The drone will NOT arm if the throttle is not at zero.
-*   **Input:** Currently configured for **IBUS** receiver (FlySky standard).
-*   **To ARM:**
-    1.  Lower Throttle to zero.
-    2.  Flip **Channel 5 (AUX1)** switch HIGH (>1600us).
-    3.  Check serial monitor/LED: "ARMED".
-*   **To DISARM:** Flip Channel 5 switch LOW.
+If you want easier tuning with lower mechanical gain:
+- Use 1000KV motors
+- Use 8045 props (10-inch)
+- Same F450 frame
 
-### 4. Emergency Stop
-*   **Software Kill Switch:** Disarm via TX switch.
-*   **Hardware Panic Button:** Pressing the **BOOT button** while flying will immediately kill all motors (Emergency Stop). Use only in case of crashes or flyaways!
+Also note: This firmware is written in **pure C** using the ESP-IDF framework, not Arduino C++.
+
 
 ---
 
-## 💻 Code Structure (`/lib`)
+## Features
 
-The codebase is modular, mimicking professional flight stacks like Betaflight/PX4.
-
-*   `main.c`: The conductor. Setup, scheduling, and the main 250Hz loop.
-*   `imu/`: MPU6050 driver, calibration logic, and complementary filter.
-*   `pid/`: Generic PID controller math with D-term filtering and anti-windup.
-*   `angle_control/`: Outer loop logic (converts Angle Error -> Rate Target).
-*   `rate_control/`: Inner loop logic (converts Rate Error -> Motor Mix).
-*   `mixer/`: Mathematical mixing for Quad-X configuration.
-*   `pwm/`: ESP32 LEDC (PWM) driver for ESCs (400Hz update rate).
-*   `rx/`: IBUS receiver driver (UART based).
-*   `config/`: Handling of settings (PID gains) and persistence (NVS).
-*   `blackbox/`: Data logging system (stores flight data to internal flash).
-*   `adc/`: Battery voltage monitoring.
+- Cascaded PID control (outer angle loop + inner rate loop) running at 250Hz
+- Self-leveling angle mode with automatic horizon correction
+- Complementary filter for sensor fusion (gyro + accelerometer)
+- One-time accelerometer calibration saved to flash memory
+- Crash detection - auto disarms if the drone tilts too far or spins out of control
+- RX failsafe - motors shut off if signal is lost
+- Emergency stop button (BOOT button kills motors instantly)
+- Low battery warning with LED indication
+- PPM receiver input - works with FlySky and similar transmitters
 
 ---
 
-## 🔧 Tuning Guide (Current Values)
+## Hardware Used
 
-The current tune is set for a "High Gain" system (F450/1400KV).
-
-**Rate Loop (Inner)**
-*   **Roll/Pitch:** P=0.45, I=0.15, D=0.012
-    *   *Locked in. High P provides snap, I corrects imbalance.*
-*   **Yaw:** P=3.50, I=0.80
-    *   *Very stiff yaw to counter torque from large 8" props.*
-
-**Angle Loop (Outer)**
-*   **Level Strength (P):** 3.50 (Strong self-leveling)
-*   **Drift Correction (I):** 0.20
-    *   *Corrects for Center of Gravity (CG) imbalances over time.*
-
----
-
-## ⚡ Troubleshooting
-
-**1. Drone Drifts Forward/Backward**
-*   **Cause:** Accelerometer calibration offset.
-*   **Fix:** Perform the **One-Time Calibration** (see above) on a truly level surface. Use a bubble level!
-
-**2. Drifts in Yaw (Spins)**
-*   **Cause:** Mechanical twist in motors or compass/gyro drift.
-*   **Fix:** The high I-gain on Yaw (0.80) usually fixes this. Ensure props are tight.
-
-**3. Wobbles Fast (Oscillation)**
-*   **Cause:** P-gain too high.
-*   **Fix:** Reduce Rate P-gain slightly (0.45 -> 0.40).
-
-**4. Won't Arm**
-*   **Cause:** Safety checks.
-*   **Fix:** Ensure Throttle is at minimum. Ensure drone is not upside down (Crash protection). Check RX connection.
+| Component | What I Used |
+|-----------|-------------|
+| Flight Controller | ESP32-WROOM-32 |
+| IMU | MPU6050 |
+| Frame | F450 |
+| Motors | 1400KV Brushless |
+| Propellers | 8045 |
+| ESCs | 30A |
+| Battery | 3S 2200mAh LiPo |
+| Transmitter | FlySky FS-i6 |
+| Receiver | FlySky FS-iA6B (PPM mode) |
 
 ---
 
-## 📝 Credits
-**Author:** 4th Year Engineering Student  
-**Project:** Quadcopter Flight Controller Implementation
-**Status:** Flight Ready v1.0
+## Wiring
 
-*"It flies, it crashes, it learns. Just like its engineer."*
+```
+ESP32 Pin    ->    Component
+-----------------------------------
+GPIO 13      ->    Motor 1 (Rear Right)
+GPIO 27      ->    Motor 2 (Front Right)
+GPIO 26      ->    Motor 3 (Rear Left)
+GPIO 25      ->    Motor 4 (Front Left)
+GPIO 33      ->    Receiver PPM Signal
+GPIO 34      ->    Battery Voltage (via divider)
+GPIO 21      ->    MPU6050 SDA
+GPIO 22      ->    MPU6050 SCL
+GPIO 2       ->    Status LED
+GPIO 0       ->    BOOT Button
+```
+
+## Motor Layout
+
+```
+Motor positions (Quad-X, props-out):
+
+   M4(CCW)──────M2(CW)      FRONT
+       ╲      ╱
+         ╲  ╱
+         ╱  ╲
+       ╱      ╲
+   M3(CW)──────M1(CCW)      REAR
+
+CCW = Counter-Clockwise
+CW  = Clockwise
+```
+
+---
+
+## How to Build and Flash
+
+You'll need PlatformIO installed (VS Code extension works great).
+
+```bash
+# Clone the repo
+git clone https://github.com/madhav-sawant/QuadFC.git
+cd QuadFC
+
+# Build and upload
+pio run --target upload
+
+# Open serial monitor
+pio device monitor
+```
+
+---
+
+## Calibration
+
+Before first flight, you need to calibrate the accelerometer:
+
+1. Place the drone on a flat, level surface
+2. Hold the BOOT button while powering on
+3. Keep holding until the LED starts blinking
+4. Release the button and wait for calibration to complete
+5. Done - calibration is saved permanently
+
+---
+
+## How to Arm and Fly
+
+1. Power on the drone and keep it still (gyro calibrates automatically)
+2. Make sure throttle is at minimum
+3. Flip the arm switch (Channel 5) to HIGH
+4. LED turns solid - drone is armed
+5. Slowly raise throttle and fly
+
+To disarm, flip the arm switch back to LOW.
+
+---
+
+## System Architecture
+
+```
+                    CONTROL LOOP (250Hz)
+
+    IMU ──────> ANGLE LOOP ──────> RATE LOOP ──────> MIXER
+   (MPU6050)     (PI)              (PID)            (Quad-X)
+                   ^                                   |
+                   |                                   v
+    RECEIVER ──────┘                              M1  M2  M3  M4
+     (PPM)
+```
+
+The system uses a cascaded control structure:
+- Outer loop (Angle) - maintains the desired tilt angle
+- Inner loop (Rate) - handles fast stabilization using gyro data
+
+---
+
+## Safety Features
+
+| What | When it triggers | What happens |
+|------|------------------|--------------|
+| Crash detection | Angle > 60° or Gyro > 2000°/s | Motors shut off |
+| RX failsafe | No signal for 200ms | Motors shut off |
+| Emergency stop | BOOT button pressed | Motors shut off immediately |
+| Arm safety | Throttle not at zero | Won't arm |
+| Low battery | Voltage < 10.5V | LED blinks warning |
+
+---
+
+## What's Next
+
+Currently working on:
+- Barometer-based altitude hold
+
+Planned for future:
+- GPS position hold
+- Waypoint navigation
+- Return to home
+
+---
+
+## Project Structure
+
+```
+QuadFC/
+├── src/
+│   └── main.c              # Main flight controller
+├── lib/
+│   ├── adc/                # Battery monitoring
+│   ├── angle_control/      # Outer loop
+│   ├── config/             # Settings & storage
+│   ├── imu/                # MPU6050 & sensor fusion
+│   ├── mixer/              # Motor mixing
+│   ├── pid/                # PID math
+│   ├── pwm/                # ESC output
+│   ├── rate_control/       # Inner loop
+│   └── rx/                 # Receiver driver
+├── platformio.ini
+└── README.md
+```
+
+---
+
+## Credits
+
+**Firmware:** Madhav Sawant
+
+**Inspired by:**
+- Betaflight
+- ArduPilot
+- ESP-Drone by Espressif
+
+
+---
+
+## License
+
+This project is for **educational and personal use only**.
+
+You are free to:
+- Learn from this code
+- Modify it for personal projects
+- Share it with proper credit
+
+You are NOT allowed to:
+- Use this in any commercial product
+- Sell this code or products based on it
+
