@@ -17,14 +17,7 @@ void rate_control_update(float desired_roll_rate, float desired_pitch_rate,
                          float desired_yaw_rate, float gyro_roll_rate,
                          float gyro_pitch_rate, float gyro_yaw_rate);
 const rate_output_t *rate_control_get_output(void);
-float rate_control_get_i_roll(void);
-float rate_control_get_i_pitch(void);
-float rate_control_get_i_yaw(void);
-
-// Freeze/unfreeze integral accumulation (prevents windup during ground idle)
 void rate_control_freeze_integral(bool freeze);
 
-// Reset all PID states (call on disarm)
-void rate_control_reset(void);
-
 #endif // RATE_CONTROL_H
+

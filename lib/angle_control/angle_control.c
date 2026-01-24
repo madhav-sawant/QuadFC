@@ -82,8 +82,3 @@ void angle_control_update(float target_roll, float target_pitch,
 }
 
 const angle_output_t *angle_control_get_output(void) { return &output; }
-
-void angle_control_get_i_terms(float *roll_i, float *pitch_i) {
-  if (roll_i) *roll_i = i_roll_accum * sys_cfg.angle_ki;
-  if (pitch_i) *pitch_i = i_pitch_accum * sys_cfg.angle_ki;
-}

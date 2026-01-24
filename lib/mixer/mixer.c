@@ -95,5 +95,3 @@ void mixer_get_outputs(uint16_t *m1, uint16_t *m2, uint16_t *m3, uint16_t *m4) {
   *m3 = motors[2];
   *m4 = motors[3];
 }
-
-bool mixer_is_idle(void) { return motors[0] <= MIXER_IDLE_THROTTLE; }

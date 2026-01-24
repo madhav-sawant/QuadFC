@@ -119,11 +119,3 @@ uint16_t rx_get_channel(uint8_t channel_index) {
   portENABLE_INTERRUPTS();
   return val;
 }
-
-void rx_get_all(uint16_t *channels) {
-  portDISABLE_INTERRUPTS();
-  for (int i = 0; i < RX_CHANNEL_COUNT; i++) {
-    channels[i] = rx_channels[i];
-  }
-  portENABLE_INTERRUPTS();
-}

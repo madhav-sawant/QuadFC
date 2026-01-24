@@ -46,7 +46,7 @@
 #define ACCEL_SCALE_FACTOR 16384.0f // LSB/g for ±2g range
 
 // Sensor Fusion
-#define COMPLEMENTARY_ALPHA 0.9996f // 99.96% gyro, 0.04% accel
+#define COMPLEMENTARY_ALPHA 0.996f  // 99.6% gyro, 0.4% accel (was 0.9996 - too gyro-heavy, caused drift)
 #define GYRO_LPF_ALPHA 0.70f        // Gyro software LPF (for PID)
 #define ACCEL_LPF_ALPHA 0.15f       // Accel software LPF
 #define MAX_ANGLE_RATE_DPS 500.0f   // Spike filter limit
