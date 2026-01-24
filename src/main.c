@@ -27,7 +27,7 @@
 #include <stdio.h>
 
 #include "adc.h"
-#include "blackbox.h"
+// #include "blackbox.h"  // Disabled - uncomment to enable flight logging
 #include "config.h"
 #include "imu.h"
 #include "mixer.h"
@@ -79,7 +79,7 @@ static void control_loop_task(void *arg) {
   int64_t next_cycle = esp_timer_get_time();
 
   int debug_div = 0;  // Divider for debug output (we don't need 250Hz debugging)
-  int bb_div = 0;     // Divider for blackbox logging
+  // int bb_div = 0;     // Divider for blackbox logging (disabled)
 
   printf("Control loop started on Core %d - let's fly!\n", xPortGetCoreID());
   esp_task_wdt_add(NULL); // Add this task to watchdog - resets if we hang
@@ -199,13 +199,12 @@ static void control_loop_task(void *arg) {
     }
 
     // -------------------------------------------------------------------------
-    // Blackbox logging at 50Hz
+    // Blackbox logging (DISABLED - uncomment to enable)
     // Records flight data for post-flight analysis
-    // Super useful for debugging oscillations and tuning PIDs
     // -------------------------------------------------------------------------
+    /*
     if (system_armed && ++bb_div >= BLACKBOX_LOG_DIVIDER) {
       bb_div = 0;
-
       blackbox_entry_t entry = {
           .angle_roll = imu->roll_deg,
           .angle_pitch = imu->pitch_deg,
@@ -227,8 +226,9 @@ static void control_loop_task(void *arg) {
       };
       blackbox_log(&entry);
     } else if (!system_armed) {
-      bb_div = 0; // Reset counter when disarmed
+      bb_div = 0;
     }
+    */
 
     // -------------------------------------------------------------------------
     // Wait for next cycle - precise timing is crucial for PID stability
@@ -360,7 +360,7 @@ void app_main(void) {
   adc_init();       // Battery voltage monitoring
   rx_init();        // RC receiver (IBUS protocol)
   mixer_init();     // Motor mixing
-  blackbox_init();  // Flight data logging
+  // blackbox_init();  // Flight data logging (disabled)
 
   // -------------------------------------------------------------------------
   // IMU Initialization
@@ -545,15 +545,15 @@ void app_main(void) {
         rate_control_init();   // Reset PID controllers
         angle_control_init();
         mixer_arm(true);
-        blackbox_clear();      // Start fresh log
-        blackbox_start();
+        // blackbox_clear();      // Start fresh log (disabled)
+        // blackbox_start();
         printf(">>> ARMED - MOTORS LIVE! <<<\n");
       }
     } else {
       if (system_armed) {
         system_armed = false;
         mixer_arm(false);
-        blackbox_stop();
+        // blackbox_stop();  // (disabled)
         printf(">>> DISARMED <<<\n");
       }
       // Clear error state when arm switch is turned off
