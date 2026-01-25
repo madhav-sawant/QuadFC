@@ -28,7 +28,7 @@ If you watch YouTube tutorials (like Joop Brokking or Carbon Aeronautics) where 
 
 If you want easier tuning with lower mechanical gain:
 - Use 1000KV motors
-- Use 8045 props (8-inch)
+- Use 8045 props (10-inch)
 - Same F450 frame
 
 Also note: This firmware is written in **pure C** using the ESP-IDF framework, not Arduino C++.
@@ -48,15 +48,9 @@ Also note: This firmware is written in **pure C** using the ESP-IDF framework, n
 - Low battery warning with LED indication
 - PPM receiver input - works with FlySky and similar transmitters
 
-**Note:** WiFi and Blackbox logging are currently disabled for better performance and range. 
-
-To enable blackbox logging:
-1. Uncomment `#include "blackbox.h"` in `src/main.c`
-2. Uncomment `blackbox_init()` and the logging block in the same file
-3. Rebuild and flash
+**Note:** WiFi and Blackbox logging are currently disabled for better performance and range. To enable them, uncomment `#define ENABLE_WIFI` in `src/main.c` and add back the blackbox logging calls.
 
 ---
-
 
 
 ## Hardware Used
@@ -155,19 +149,72 @@ To disarm, flip the arm switch back to LOW.
 ## System Architecture
 
 ```
-                    CONTROL LOOP (250Hz)
+                           CONTROL LOOP (250Hz)
 
-    IMU ──────> ANGLE LOOP ──────> RATE LOOP ──────> MIXER
-   (MPU6050)     (PI)              (PID)            (Quad-X)
-                   ^                                   |
-                   |                                   v
-    RECEIVER ──────┘                              M1  M2  M3  M4
-     (PPM)
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                          │
+│   ┌─────────────┐      ┌───────────────┐                                 │
+│   │   MPU6050   │      │ COMPLEMENTARY │     Current                     │
+│   │  Accel+Gyro │─────▶│    FILTER     │────▶ Angle                      │
+│   │             │      └───────────────┘        │                        │
+│   └──────┬──────┘                               ▼                        │
+│          │                              ┌─────────────┐                  │
+│          │                              │  ANGLE LOOP │    Target        │
+│          │         ┌───────────────┐    │    (PI)     │───▶ Rate         │
+│          │         │   RECEIVER    │───▶│             │      │           │
+│          │         │    (iBUS)     │    └─────────────┘      │           │
+│          │         └───────────────┘     Target Angle        │           │
+│          │           Pilot Sticks                            ▼           │
+│          │                                           ┌─────────────┐     │
+│          │             Current Rate                  │  RATE LOOP  │     │
+│          └──────────────────────────────────────────▶│    (PID)    │     │
+│                       (Gyro direct)                  └──────┬──────┘     │
+│                                                             │            │
+│                                                             ▼            │
+│                                                      ┌─────────────┐     │
+│     ┌───────────────────────────────────────────────▶│    MIXER    │     │
+│     │                                                │   (Quad-X)  │     │
+│     │  Throttle                                      └──────┬──────┘     │
+│   ┌─┴───────────┐                                           │            │
+│   │  RECEIVER   │                                           ▼            │
+│   │   (iBUS)    │                                  ┌─────────────────┐   │
+│   └─────────────┘                                  │  M1  M2  M3  M4 │   │
+│                                                    │     (Motors)    │   │
+│                                                    └─────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Points:**
+- **Complementary Filter** combines Accelerometer + Gyroscope to get stable angle
+- **Angle Loop** compares pilot's target angle with current angle → outputs target rotation rate
+- **Rate Loop** compares target rate with actual gyro rate (direct from sensor) → outputs motor corrections
+- **Mixer** combines throttle + corrections → individual motor speeds
 
 The system uses a cascaded control structure:
 - Outer loop (Angle) - maintains the desired tilt angle
 - Inner loop (Rate) - handles fast stabilization using gyro data
+
+### Sensor Fusion: Complementary Filter
+
+The IMU (MPU6050) has two sensors that measure orientation:
+
+| Sensor | What it measures | Advantage | Disadvantage |
+|--------|------------------|-----------|--------------|
+| Accelerometer | Gravity direction | No drift, knows absolute "down" | Noisy, affected by vibrations |
+| Gyroscope | Rotation rate | Fast, smooth, ignores vibrations | Drifts over time |
+
+A **Complementary Filter** combines both to get the best of each:
+
+```
+new_angle = α × (old_angle + gyro × dt) + (1-α) × accel_angle
+```
+
+Where `α = 0.996` (99.6% gyro, 0.4% accelerometer)
+
+- **Short-term (fast changes):** Trust gyroscope (smooth, responsive)
+- **Long-term (slow corrections):** Trust accelerometer (prevents drift)
+
+This gives us fast response without gyro drift - essential for stable flight.
 
 ---
 
