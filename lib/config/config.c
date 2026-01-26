@@ -21,11 +21,14 @@ void config_load_defaults(void) {
   // - Angle: Calculated P=3.5 for 70dps correction at max tilt.
   //   I=0.20 adds position hold "memory" to fight steady-state drift (M1).
   
-  sys_cfg.roll_kp = 0.45f;
-  sys_cfg.roll_ki = 0.15f; 
+  // ANTI-OSCILLATION TUNE for High Gain System
+  // Lower P = less aggressive correction
+  // Original Stable PID Values
+  sys_cfg.roll_kp = 0.50f;
+  sys_cfg.roll_ki = 0.15f;
   sys_cfg.roll_kd = 0.012f;
 
-  sys_cfg.pitch_kp = 0.45f;
+  sys_cfg.pitch_kp = 0.50f;
   sys_cfg.pitch_ki = 0.15f;
   sys_cfg.pitch_kd = 0.012f;
 
@@ -33,7 +36,7 @@ void config_load_defaults(void) {
   sys_cfg.yaw_ki = 0.80f;   // Anti-drift integrator
   sys_cfg.yaw_kd = 0.00f;
 
-  sys_cfg.rate_output_limit = 180.0f; 
+  sys_cfg.rate_output_limit = 400.0f; // INCREASED from 180 to 400 to prevent saturation 
   sys_cfg.rate_integral_limit = 60.0f;
 
   // ANGLE MODE - Calculated Performance

@@ -5,7 +5,6 @@
 
 #include "angle_control.h"
 #include "../config/config.h"
-#include <math.h>
 
 // Internal state
 static float i_roll_accum = 0.0f;
@@ -32,10 +31,11 @@ void angle_control_update(float target_roll, float target_pitch,
 
   // I-term logic
   if (!armed) {
+    // Only reset when disarmed
     i_roll_accum = 0.0f;
     i_pitch_accum = 0.0f;
   } else if (sys_cfg.angle_ki > 0.0f && throttle > ANGLE_I_THROTTLE_MIN) {
-    // Only accumulate if armed and throttle is high enough
+    // Accumulate when armed and throttle high enough
     float max_i_accum = MAX_ANGLE_I / sys_cfg.angle_ki;
 
     i_roll_accum += roll_error * dt_sec;
@@ -50,17 +50,8 @@ void angle_control_update(float target_roll, float target_pitch,
     if (i_pitch_accum < -max_i_accum)
       i_pitch_accum = -max_i_accum;
   } else {
-    // Hold I-term (don't clear it mid-flight if throttle drops momentarily, but don't accumulate)
-    // Actually main.c logic was: if armed but low throttle -> hold? 
-    // Re-reading main.c: "else { angle_i = 0 }" was applied if (!armed).
-    // The "else if" managed the active accumulation.
-    // Wait, main.c had a subtle logic: 
-    // if (!armed) { reset } 
-    // else if (ki > 0 && thr > 1200) { accumulate }
-    // else { reset } <--- This 3rd branch in main.c line 157 resets it if high throttle condition fails!
-    // Let's replicate main.c exactly to avoid behavior changes.
-    i_roll_accum = 0.0f;
-    i_pitch_accum = 0.0f;
+    // Hold I-term when throttle is low (prevent windup on ground, but don't lose trim in flight)
+    // Do nothing - just don't add to accumulator
   }
 
   // Calculate Target Rate = P + I

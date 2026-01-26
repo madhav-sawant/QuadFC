@@ -32,14 +32,16 @@ void mixer_init(void) {
   }
 }
 
-// Yaw trim to compensate for CW/CCW motor thrust imbalance
-// Positive value = bias toward CW motors (fights left spin)
-// Adjust this value if quad still drifts: increase if spinning left, decrease
-// if spinning right
-static const float YAW_TRIM = 0.0f;  // Disabled - let PID I-term handle bias
+// Trim values - keep at 0, let PID I-term handle bias naturally
+// Hard trims reduce control authority and can cause motor saturation
+static const float YAW_TRIM = 0.0f;
+static const float ROLL_TRIM = 0.0f;
+static const float PITCH_TRIM = 0.0f;
 
 void mixer_update(uint16_t throttle, float roll, float pitch, float yaw) {
-  // Apply yaw trim to pre-compensate for mechanical bias
+  // Apply trims to pre-compensate for mechanical imbalances
+  roll = roll + ROLL_TRIM;
+  pitch = pitch + PITCH_TRIM;
   yaw = yaw + YAW_TRIM;
 
   if (!armed) {
@@ -50,8 +52,9 @@ void mixer_update(uint16_t throttle, float roll, float pitch, float yaw) {
     return;
   }
 
-  // Idle spin without PID mixing at low throttle
-  if (throttle < MIXER_IDLE_THROTTLE + 50) {
+  // Idle spin without PID mixing ONLY at zero stick (safe guard)
+  // Allow PID mixing as soon as stick is raised slightly (>1050) to maintain control during descent
+  if (throttle < 1050) {
     for (int i = 0; i < 4; i++) {
       motors[i] = MIXER_IDLE_THROTTLE;
       pwm_set_motor(i, MIXER_IDLE_THROTTLE);

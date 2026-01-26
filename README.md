@@ -2,7 +2,7 @@
 
 A custom flight controller firmware built from scratch on ESP32. Inspired by Betaflight and ArduPilot, but designed for learning and experimentation.
 
-**Status:** Angle mode tuned and working. Future updates in progress.
+**Status:** Angle mode flight tested (Control loops active, tuning in progress). Future updates in progress.
 
 ---
 
@@ -162,7 +162,7 @@ To disarm, flip the arm switch back to LOW.
 │          │                              │  ANGLE LOOP │    Target        │
 │          │         ┌───────────────┐    │    (PI)     │───▶ Rate         │
 │          │         │   RECEIVER    │───▶│             │      │           │
-│          │         │    (iBUS)     │    └─────────────┘      │           │
+│          │         │     (PPM)     │    └─────────────┘      │           │
 │          │         └───────────────┘     Target Angle        │           │
 │          │           Pilot Sticks                            ▼           │
 │          │                                           ┌─────────────┐     │
@@ -177,7 +177,7 @@ To disarm, flip the arm switch back to LOW.
 │     │  Throttle                                      └──────┬──────┘     │
 │   ┌─┴───────────┐                                           │            │
 │   │  RECEIVER   │                                           ▼            │
-│   │   (iBUS)    │                                  ┌─────────────────┐   │
+│   │    (PPM)    │                                  ┌─────────────────┐   │
 │   └─────────────┘                                  │  M1  M2  M3  M4 │   │
 │                                                    │     (Motors)    │   │
 │                                                    └─────────────────┘   │
@@ -222,7 +222,7 @@ This gives us fast response without gyro drift - essential for stable flight.
 
 | What | When it triggers | What happens |
 |------|------------------|--------------|
-| Crash detection | Angle > 60° or Gyro > 2000°/s | Motors shut off |
+| Crash detection | Angle > 90° or Gyro > 2000°/s | Motors shut off |
 | RX failsafe | No signal for 200ms | Motors shut off |
 | Emergency stop | BOOT button pressed | Motors shut off immediately |
 | Arm safety | Throttle not at zero | Won't arm |
@@ -286,4 +286,3 @@ You are free to:
 You are NOT allowed to:
 - Use this in any commercial product
 - Sell this code or products based on it
-

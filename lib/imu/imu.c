@@ -52,10 +52,6 @@
 #define MAX_ANGLE_RATE_DPS 500.0f   // Spike filter limit
 #define RAD_TO_DEG 57.2957795f
 
-// Manual trim (set via calibration)
-#define PITCH_TRIM_DEG 0.0f
-#define ROLL_TRIM_DEG 0.0f
-
 /* ─────────────────────────────────────────────────────────────────────────────
  * Static Variables
  * ─────────────────────────────────────────────────────────────────────────────
@@ -288,8 +284,8 @@ void imu_read(float dt_sec) {
 
   // Complementary filter for angle estimation
   if (first_read) {
-    imu_state.pitch_deg = accel_pitch + PITCH_TRIM_DEG;
-    imu_state.roll_deg = accel_roll + ROLL_TRIM_DEG;
+    imu_state.pitch_deg = accel_pitch;
+    imu_state.roll_deg = accel_roll;
     first_read = false;
     printf("IMU: Initialized (Roll=%.1f, Pitch=%.1f)\n", imu_state.roll_deg,
            imu_state.pitch_deg);
@@ -300,10 +296,10 @@ void imu_read(float dt_sec) {
     // Use RAW gyro for angle integration (faster response)
     float new_pitch =
         COMPLEMENTARY_ALPHA * (prev_pitch + gyro_raw_y * dt_sec) +
-        (1.0f - COMPLEMENTARY_ALPHA) * (accel_pitch + PITCH_TRIM_DEG);
+        (1.0f - COMPLEMENTARY_ALPHA) * accel_pitch;
     float new_roll =
         COMPLEMENTARY_ALPHA * (prev_roll + gyro_raw_x * dt_sec) +
-        (1.0f - COMPLEMENTARY_ALPHA) * (accel_roll + ROLL_TRIM_DEG);
+        (1.0f - COMPLEMENTARY_ALPHA) * accel_roll;
 
     // Spike filter: limit angle rate of change
     float max_delta = MAX_ANGLE_RATE_DPS * dt_sec;
@@ -407,4 +403,34 @@ void imu_print_calibration(void) {
 
 uint32_t imu_get_i2c_errors(void) {
   return i2c_error_count;
+}
+
+/**
+ * Set current surface as LEVEL when arming
+ * 
+ * Whatever the accelerometer reads right now becomes the new "zero".
+ * This allows flying from ANY surface without drift.
+ */
+void imu_set_level_on_arm(void) {
+  uint8_t buffer[6];
+  if (read_registers(REG_ACCEL_XOUT_H, buffer, 6) == ESP_OK) {
+    float ax = (int16_t)((buffer[0] << 8) | buffer[1]) / ACCEL_SCALE_FACTOR;
+    float ay = (int16_t)((buffer[2] << 8) | buffer[3]) / ACCEL_SCALE_FACTOR;
+    float az = (int16_t)((buffer[4] << 8) | buffer[5]) / ACCEL_SCALE_FACTOR;
+    
+    // Calculate RAW accelerometer angle (no offset applied)
+    float raw_accel_pitch = atan2f(ax, sqrtf(ay * ay + az * az)) * RAD_TO_DEG;
+    float raw_accel_roll = atan2f(ay, az) * RAD_TO_DEG;
+    
+    // Update calibration offset = current raw reading
+    // This makes current surface the new "zero"
+    accel_offset_pitch = raw_accel_pitch;
+    accel_offset_roll = raw_accel_roll;
+    
+    // Set angle to ZERO (current surface is now "level")
+    imu_state.pitch_deg = 0.0f;
+    imu_state.roll_deg = 0.0f;
+    
+    // printf removed for timing - runs in arm path
+  }
 }

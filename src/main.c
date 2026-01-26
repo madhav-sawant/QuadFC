@@ -27,7 +27,7 @@
 #include <stdio.h>
 
 #include "adc.h"
-// #include "blackbox.h"  // Disabled - uncomment to enable flight logging
+#include "blackbox.h"  // Flight data logging
 #include "config.h"
 #include "imu.h"
 #include "mixer.h"
@@ -35,6 +35,7 @@
 #include "rate_control.h"
 #include "angle_control.h"
 #include "rx.h"
+#include "webserver.h"
 
 /* =============================================================================
  * CONFIGURATION PARAMETERS
@@ -45,13 +46,13 @@
 #define BUTTON_PIN 0        // Boot button - used for calibration and emergency stop
 
 #define CONTROL_LOOP_FREQ_HZ 250    // 250Hz = 4ms loop time, fast enough for stable flight
-#define TUNING_THROTTLE_LIMIT 1650  // Safety limit - don't want it flying away during testing
+#define TUNING_THROTTLE_LIMIT 2000  // MAX POWER: Full 2000us authority for recovery
 
-#define RC_DEADBAND_US 30           // Stick deadband to prevent jitter
+#define RC_DEADBAND_US 50           // Stick deadband to prevent jitter
 #define RC_MAX_YAW_RATE_DPS 180.0f  // Max yaw rotation speed in degrees per second
 
 // Safety thresholds - if exceeded, something has gone very wrong
-#define CRASH_ANGLE_DEG 60.0f       // Drone shouldn't tilt more than 60 degrees
+#define CRASH_ANGLE_DEG 90.0f       // Increased to 90 to allow recovery from steep angles (wind/TPA)
 #define CRASH_GYRO_RATE_DPS 2000.0f // Spinning this fast = definitely crashing
 
 /* =============================================================================
@@ -61,6 +62,11 @@
  */
 bool system_armed = false;      // True when motors are live - BE CAREFUL!
 static bool error_state = false; // Latched error flag - requires pilot to reset
+
+// Auto-Centering Variables
+// Captures stick position when armed to treat as "center"
+static uint16_t rc_center_roll = 1500;
+static uint16_t rc_center_pitch = 1500;
 
 static uint16_t debug_motors[4]; // Current motor PWM values for logging
 static uint16_t debug_vbat = 0;  // Battery voltage in millivolts
@@ -79,7 +85,7 @@ static void control_loop_task(void *arg) {
   int64_t next_cycle = esp_timer_get_time();
 
   int debug_div = 0;  // Divider for debug output (we don't need 250Hz debugging)
-  // int bb_div = 0;     // Divider for blackbox logging (disabled)
+  int bb_div = 0;     // Divider for blackbox logging
 
   printf("Control loop started on Core %d - let's fly!\n", xPortGetCoreID());
   esp_task_wdt_add(NULL); // Add this task to watchdog - resets if we hang
@@ -105,7 +111,7 @@ static void control_loop_task(void *arg) {
       mixer_arm(false);
       system_armed = false;
       error_state = true;
-      printf("CRASH DETECTED: Angle exceeded %.0f degrees!\n", CRASH_ANGLE_DEG);
+      // printf removed - causes delay in crash path
     }
     if (fabs(imu->gyro_x_dps) > CRASH_GYRO_RATE_DPS ||
         fabs(imu->gyro_y_dps) > CRASH_GYRO_RATE_DPS ||
@@ -113,7 +119,7 @@ static void control_loop_task(void *arg) {
       mixer_arm(false);
       system_armed = false;
       error_state = true;
-      printf("CRASH DETECTED: Gyro rate exceeded %.0f dps!\n", CRASH_GYRO_RATE_DPS);
+      // printf removed - causes delay in crash path
     }
 
     // -------------------------------------------------------------------------
@@ -135,13 +141,17 @@ static void control_loop_task(void *arg) {
     float target_roll_angle = 0.0f;
     float target_pitch_angle = 0.0f;
 
-    // Apply deadband and convert stick position to angle
-    // Stick center = 1500us, deflection ±500us maps to ±angle_max degrees
-    if (abs(rx_roll - 1500) > RC_DEADBAND_US) {
-      target_roll_angle = (float)(rx_roll - 1500) / 500.0f * sys_cfg.angle_max;
+    // Apply RC trim - uses captured center from arming moment
+    // This allows zero drift even if TX/RX center is off (e.g. 1520 vs 1500)
+    int16_t roll_trim = rx_roll - rc_center_roll;
+    int16_t pitch_trim = rx_pitch - rc_center_pitch;
+    
+    // Apply deadband
+    if (abs(roll_trim) > RC_DEADBAND_US) {
+      target_roll_angle = (float)(roll_trim) / 500.0f * sys_cfg.angle_max;
     }
-    if (abs(rx_pitch - 1500) > RC_DEADBAND_US) {
-      target_pitch_angle = (float)(rx_pitch - 1500) / 500.0f * sys_cfg.angle_max;
+    if (abs(pitch_trim) > RC_DEADBAND_US) {
+      target_pitch_angle = (float)(pitch_trim) / 500.0f * sys_cfg.angle_max;
     }
 
     // Run the angle PI controller
@@ -158,7 +168,8 @@ static void control_loop_task(void *arg) {
     // Yaw doesn't have angle hold - just rate control
     // (Heading hold would need a magnetometer)
     float target_yaw_rate = 0.0f;
-    if (abs(rx_yaw - 1500) > RC_DEADBAND_US) {
+    // Increased deadband to 80us specifically for Yaw to prevent accidental input during throttle
+    if (abs(rx_yaw - 1500) > 80) {
       target_yaw_rate = (float)(rx_yaw - 1500) / 500.0f * RC_MAX_YAW_RATE_DPS;
     }
 
@@ -199,10 +210,9 @@ static void control_loop_task(void *arg) {
     }
 
     // -------------------------------------------------------------------------
-    // Blackbox logging (DISABLED - uncomment to enable)
-    // Records flight data for post-flight analysis
+    // Blackbox logging (ENABLED)
+    // Records flight data for post-flight analysis at ~83Hz
     // -------------------------------------------------------------------------
-    /*
     if (system_armed && ++bb_div >= BLACKBOX_LOG_DIVIDER) {
       bb_div = 0;
       blackbox_entry_t entry = {
@@ -228,7 +238,6 @@ static void control_loop_task(void *arg) {
     } else if (!system_armed) {
       bb_div = 0;
     }
-    */
 
     // -------------------------------------------------------------------------
     // Wait for next cycle - precise timing is crucial for PID stability
@@ -248,49 +257,32 @@ static void control_loop_task(void *arg) {
  * =============================================================================
  */
 static void perform_calibration(bool save_to_nvs) {
-  printf("\n========================================\n");
-  printf("       IMU CALIBRATION SEQUENCE\n");
-  printf("========================================\n");
-  printf("IMPORTANT: Keep the drone FLAT and STILL!\n");
-  printf("Don't touch it during calibration.\n\n");
-  
-  // LED on = calibration in progress
+  // LED: SOLID ON = calibration in progress
   gpio_set_level(LED_PIN, 1);
-  vTaskDelay(pdMS_TO_TICKS(2000)); // Give user time to step away
   
-  // Accelerometer calibration - finds the "level" reference
-  // This measures gravity vector and calculates offset angles
-  printf("Step 1/2: Calibrating accelerometer...\n");
+  // Wait 2 seconds for user to step away from drone
+  vTaskDelay(pdMS_TO_TICKS(2000));
+  
+  // Accelerometer calibration
   imu_calibrate_accel();
   
-  // Gyroscope calibration - finds the zero-rate bias
-  // Gyros have a small offset that drifts with temperature
-  printf("Step 2/2: Calibrating gyroscope...\n");
+  // Gyroscope calibration
   imu_calibrate_gyro();
   
-  // Optionally save to flash memory for persistence
+  // Save to flash
   if (save_to_nvs) {
-    printf("\nSaving calibration to flash memory...\n");
     imu_calibration_save_to_nvs();
-    printf("SUCCESS: Calibration saved permanently!\n");
-    printf("You won't need to recalibrate on next boot.\n");
-  } else {
-    printf("\nCalibration NOT saved (temporary only)\n");
   }
   
-  // Show what we got
-  imu_print_calibration();
-  
-  // Success indication - 3 quick blinks
-  for (int i = 0; i < 3; i++) {
-    gpio_set_level(LED_PIN, 0);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    gpio_set_level(LED_PIN, 1);
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
   gpio_set_level(LED_PIN, 0);
   
-  printf("\nCalibration complete! Ready to fly.\n");
+  // LED: 5 FAST BLINKS = calibration complete and saved!
+  for (int i = 0; i < 5; i++) {
+    gpio_set_level(LED_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    gpio_set_level(LED_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
 }
 
 /* =============================================================================
@@ -360,7 +352,11 @@ void app_main(void) {
   adc_init();       // Battery voltage monitoring
   rx_init();        // RC receiver (IBUS protocol)
   mixer_init();     // Motor mixing
-  // blackbox_init();  // Flight data logging (disabled)
+  blackbox_init();  // Flight data logging
+  
+  // Initialize Webserver (WiFi AP)
+  // Connect to 'QuadFC_Setup' 
+  webserver_init();
 
   // -------------------------------------------------------------------------
   // IMU Initialization
@@ -385,73 +381,45 @@ void app_main(void) {
   // Startup Banner
   // Makes it look professional in the serial monitor :)
   // -------------------------------------------------------------------------
-  printf("\n");
-  printf("╔═══════════════════════════════════════════════════════╗\n");
-  printf("║       QUADCOPTER FLIGHT CONTROLLER v1.0               ║\n");
-  printf("║       Final Year Engineering Project                  ║\n");
-  printf("╠═══════════════════════════════════════════════════════╣\n");
-  printf("║  Hardware: ESP32 + MPU6050 + F450 + 1400KV + 8045     ║\n");
-  printf("║  Control:  Cascaded PID @ 250Hz                       ║\n");
-  printf("╠═══════════════════════════════════════════════════════╣\n");
-  printf("║  >>> Hold BOOT button now to calibrate IMU <<<        ║\n");
-  printf("╚═══════════════════════════════════════════════════════╝\n\n");
-  
-  // Give user 1 second to press the button
-  gpio_set_level(LED_PIN, 1);
-  vTaskDelay(pdMS_TO_TICKS(1000));
-  gpio_set_level(LED_PIN, 0);
+  // LED: 3 SLOW BLINKS = "Hold BOOT button now to calibrate"
+  // -------------------------------------------------------------------------
+  for (int i = 0; i < 3; i++) {
+    gpio_set_level(LED_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    gpio_set_level(LED_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(300));
+  }
   
   bool button_pressed = (gpio_get_level(BUTTON_PIN) == 0);
   
   if (button_pressed) {
-    // -----------------------------------------------------------------------
-    // CALIBRATION MODE
-    // User held the button - do full calibration and save to NVS
-    // Must be done on a perfectly level surface!
-    // -----------------------------------------------------------------------
-    printf("\n*** CALIBRATION MODE ACTIVATED ***\n");
-    printf("Place drone on a LEVEL surface and don't touch it!\n\n");
-    
-    // Wait for button release so we don't start calibrating while they're
-    // still messing with the button
+    // CALIBRATION MODE - button held during slow blinks
+    // Wait for button release first
     while (gpio_get_level(BUTTON_PIN) == 0) {
       vTaskDelay(pdMS_TO_TICKS(10));
     }
-    vTaskDelay(pdMS_TO_TICKS(500)); // Let things settle
+    vTaskDelay(pdMS_TO_TICKS(500));
     
-    perform_calibration(true);  // true = save to NVS
+    perform_calibration(true);  // Calibrate and save to NVS
     
   } else {
-    // -----------------------------------------------------------------------
-    // NORMAL BOOT
-    // Try to load calibration from NVS, fall back to temp cal if not found
-    // -----------------------------------------------------------------------
-    printf("Normal boot - loading calibration...\n\n");
-    
+    // NORMAL BOOT - load calibration from NVS
     bool accel_cal_loaded = imu_calibration_load_from_nvs();
     
-    if (accel_cal_loaded) {
-      printf("✓ Accelerometer calibration loaded from flash\n");
-    } else {
-      printf("✗ No saved calibration found\n");
-      printf("  Tip: Hold BOOT button at startup to calibrate properly\n\n");
-      printf("  Doing temporary calibration for this session...\n");
-      
-      // Temporary calibration - not saved, user should calibrate properly
+    if (!accel_cal_loaded) {
+      // No saved calibration - do temporary calibration
+      // LED: SOLID ON 2 sec = temp calibration (not saved!)
       gpio_set_level(LED_PIN, 1);
       vTaskDelay(pdMS_TO_TICKS(2000));
       gpio_set_level(LED_PIN, 0);
       imu_calibrate_accel();
     }
     
-    // Gyro always needs calibration at boot - it drifts with temperature
-    printf("Calibrating gyroscope...\n");
+    // Gyro always calibrates at boot
     imu_calibrate_gyro();
-    
-    imu_print_calibration();
   }
 
-  // Success blinks - 3 quick ones
+  // LED: 3 QUICK BLINKS = boot successful
   for (int i = 0; i < 3; i++) {
     gpio_set_level(LED_PIN, 1);
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -459,12 +427,7 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 
-  // -------------------------------------------------------------------------
-  // Level Check
-  // Sanity check to make sure the calibration looks reasonable
-  // If roll/pitch aren't near zero, something is wrong
-  // -------------------------------------------------------------------------
-  printf("\nPerforming level check...\n");
+  // Level Check - verify calibration looks reasonable
   vTaskDelay(pdMS_TO_TICKS(500));
   
   float roll_sum = 0, pitch_sum = 0;
@@ -479,8 +442,7 @@ void app_main(void) {
   float avg_pitch = pitch_sum / 100.0f;
 
   if (fabsf(avg_roll) < 2.0f && fabsf(avg_pitch) < 2.0f) {
-    printf("✓ Level check PASSED (Roll=%.1f°, Pitch=%.1f°)\n", avg_roll, avg_pitch);
-    // Two quick blinks for success
+    // LED: 2 QUICK BLINKS = level OK
     for(int i=0; i<2; i++) {
       gpio_set_level(LED_PIN, 1);
       vTaskDelay(pdMS_TO_TICKS(100));
@@ -488,9 +450,7 @@ void app_main(void) {
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   } else {
-    printf("⚠ Level check WARNING (Roll=%.1f°, Pitch=%.1f°)\n", avg_roll, avg_pitch);
-    printf("  Drone may not be level or needs recalibration\n");
-    // Slow warning blinks - but continue anyway
+    // LED: 5 SLOW BLINKS = level warning (not level or needs recalibration)
     for(int i=0; i<5; i++) {
       gpio_set_level(LED_PIN, 1);
       vTaskDelay(pdMS_TO_TICKS(300));
@@ -499,15 +459,8 @@ void app_main(void) {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Start the control loop
-  // This runs on Core 1 at priority 24 (highest)
-  // Core 0 handles WiFi and other system tasks (but we disabled WiFi)
-  // -------------------------------------------------------------------------
-  printf("\n*** FLIGHT CONTROLLER READY ***\n");
-  printf("Arm switch: Channel 5 > 1600\n");
-  printf("Throttle must be low to arm\n\n");
-  
+  // Start the control loop on Core 1
+
   rate_control_init();
   angle_control_init();
   xTaskCreatePinnedToCore(control_loop_task, "control", 4096, NULL, 24, NULL, 1);
@@ -518,7 +471,6 @@ void app_main(void) {
   // -------------------------------------------------------------------------
   static int rx_fail = 0;   // Counter for RX failsafe
   static int bat_div = 0;   // Divider for battery check (1Hz)
-  static int led_blink = 0; // Counter for LED blinking
 
   while (1) {
     // Check if receiver is connected (timeout-based)
@@ -526,9 +478,7 @@ void app_main(void) {
     rx_fail = rx_instant ? 0 : rx_fail + 1;
     bool rx_ok = (rx_fail < 20); // ~200ms timeout
 
-    if (!rx_ok && system_armed) {
-      printf("!!! RX FAILSAFE - DISARMING !!!\n");
-    }
+    // RX failsafe handled silently - printf removed for timing
 
     // Check arm switch (usually channel 5)
     uint16_t rx_aux1 = rx_get_channel(4);
@@ -544,22 +494,29 @@ void app_main(void) {
         system_armed = true;
         rate_control_init();   // Reset PID controllers
         angle_control_init();
+        
+        // AUTO-LEVEL ON ARM: Capture current angle as "level"
+        // This allows drone to take off from ANY surface without drift!
+        imu_set_level_on_arm();
+        
+        // AUTO-CENTER: Capture current stick positions as new center
+        rc_center_roll = rx_get_channel(0);  // Roll
+        rc_center_pitch = rx_get_channel(1); // Pitch
+        
         mixer_arm(true);
-        // blackbox_clear();      // Start fresh log (disabled)
-        // blackbox_start();
-        printf(">>> ARMED - MOTORS LIVE! <<<\n");
+        blackbox_clear();
+        blackbox_start();
       }
     } else {
       if (system_armed) {
         system_armed = false;
         mixer_arm(false);
-        // blackbox_stop();  // (disabled)
-        printf(">>> DISARMED <<<\n");
+        blackbox_stop();
       }
       // Clear error state when arm switch is turned off
       if (error_state && !arm_sw) {
         error_state = false;
-        printf("Error state cleared\n");
+        // printf removed for timing
       }
     }
 
@@ -572,25 +529,26 @@ void app_main(void) {
       debug_vbat = adc_read_battery_voltg();
 
       if (debug_vbat > 0 && debug_vbat < sys_cfg.low_bat_threshold) {
-        printf("!!! LOW BATTERY: %d mV - LAND NOW! !!!\n", debug_vbat);
+        // Low battery warning - printf removed for timing
       }
     }
 
     // -----------------------------------------------------------------------
     // LED Status Indication
-    // - Blinking = low battery warning
-    // - Solid on = armed
+    // - Solid ON = low battery (also disarms!)
+    // - Solid ON = armed
     // - Off = disarmed
     // -----------------------------------------------------------------------
     bool low_bat = (debug_vbat > 0 && debug_vbat < sys_cfg.low_bat_threshold);
     if (low_bat) {
-      // Fast blink for low battery
-      if (++led_blink >= 25) {
-        led_blink = 0;
-        gpio_set_level(LED_PIN, !gpio_get_level(LED_PIN));
+      // Low battery - DISARM and turn LED solid ON
+      if (system_armed) {
+        system_armed = false;
+        mixer_arm(false);
+        // printf removed for timing
       }
+      gpio_set_level(LED_PIN, 1);  // Solid ON for low battery
     } else {
-      led_blink = 0;
       gpio_set_level(LED_PIN, system_armed ? 1 : 0);
     }
 
@@ -603,7 +561,7 @@ void app_main(void) {
       system_armed = false;
       mixer_arm(false);
       error_state = true;
-      printf("!!! EMERGENCY STOP ACTIVATED !!!\n");
+      // printf removed for timing
     }
 
     vTaskDelay(pdMS_TO_TICKS(10)); // ~100Hz loop rate

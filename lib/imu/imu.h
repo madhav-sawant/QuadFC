@@ -44,4 +44,8 @@ void imu_print_calibration(void);
 // Get diagnostic counters
 uint32_t imu_get_i2c_errors(void);
 
+// Auto-level on arm: captures current angle as "level"
+// Call this when arming so drone can take off from any surface
+void imu_set_level_on_arm(void);
+
 #endif // IMU_H

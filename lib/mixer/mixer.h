@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define MIXER_IDLE_THROTTLE 1150
-#define MIXER_MAX_THROTTLE 1700
+#define MIXER_MAX_THROTTLE 2000
 #define MIXER_STOP_CMD 1000
 
 void mixer_init(void);
