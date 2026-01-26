@@ -48,7 +48,12 @@ Also note: This firmware is written in **pure C** using the ESP-IDF framework, n
 - Low battery warning with LED indication
 - PPM receiver input - works with FlySky and similar transmitters
 
-**Note:** WiFi and Blackbox logging are currently disabled for better performance and range. To enable them, uncomment `#define ENABLE_WIFI` in `src/main.c` and add back the blackbox logging calls.
+**WiFi Connection:**
+- **SSID:** `QuadPID`
+- **Password:** `12345678`
+- **IP Address:** `192.168.4.1`
+
+Connect to this network to access the web interface for PID tuning and Blackbox log downloading.
 
 ---
 
