@@ -28,7 +28,7 @@ If you watch YouTube tutorials (like Joop Brokking or Carbon Aeronautics) where 
 
 If you want easier tuning with lower mechanical gain:
 - Use 1000KV motors
-- Use 8045 props (10-inch)
+- Use 8045 props (8-inch)
 - Same F450 frame
 
 Also note: This firmware is written in **pure C** using the ESP-IDF framework, not Arduino C++.
